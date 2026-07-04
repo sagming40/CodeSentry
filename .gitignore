@@ -1,0 +1,6 @@
+Thumbs.db
+desktop.ini
+.env
+.vscode/
+__pycache__/
+*.pyc
