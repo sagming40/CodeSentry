@@ -9,10 +9,12 @@ client = anthropic.Anthropic()  # 환경 변수에서 키 자동으로 읽음
 MODEL_NAME = "claude-haiku-4-5-20251001"
 
 
-def assess_risk(function_name: str, complexity: int, threshold: int) -> dict:
+def assess_risk(function_name: str, complexity: int, threshold: int) -> tuple[dict, dict]:
     """
     findings 테이블에 저장된 위험 코드 1건에 대해 LLM 판단을 요청한다.
-    반환값: {"action_type", "risk_reason", "confidence"}
+    반환값: (action_result, usage)
+      - action_result: {"action_type", "risk_reason", "confidence"}
+      - usage: {"input_tokens", "output_tokens}
     """  
     message = client.messages.create(
         model=MODEL_NAME,
@@ -32,9 +34,14 @@ def assess_risk(function_name: str, complexity: int, threshold: int) -> dict:
         }]
     )
     
+    usage = {
+        "input_tokens": message.usage.input_tokens,
+        "output_tokens": message.usage.output_tokens,
+    }
+    
     for block in message.content:
         if block.type == "tool_use":
-            return block.input
+            return block.input, usage
         
     # tool_use 블록이 하나도 없는 이례적인 경우 대비
     raise RuntimeError("assess_risk 호출에서 tool_use 응답을 받지 못했습니다.")
@@ -63,4 +70,19 @@ def finalize_action(raw_result: dict) -> dict:
             else None
         )
     } 
+    
+# Claude Haiku 4.5 가격 (2026-07 기준, 100만 토큰당 달러)
+# 출처: https://www.anthropic.com/news/claude-haiku-4-5 (공식 발표)
+
+PRICE_PER_MILLION_INPUT = 1.0
+PRICE_PER_MILLION_OUTPUT = 5.0
+
+
+def calculate_cost(usage: dict) -> float:
+    """
+    토튼 사용량을 실제 달러 비용으로 환산한다.
+    """    
+    input_cost = (usage["input_tokens"] / 1_000_000) * PRICE_PER_MILLION_INPUT
+    output_cost = (usage["output_tokens"] / 1_000_000) * PRICE_PER_MILLION_OUTPUT
+    return round(input_cost + output_cost, 8)
     
