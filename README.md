@@ -3,7 +3,7 @@
 > 저장소를 스캔해 위험도를 판단하고, 테스트 작성 또는 코드 수정 중
 > 필요한 조치를 스스로 선택해 실행·검증하는 AI 에이전트
 
-🚧 개발 중 (2026.07~) · 현재 진행 상황: **EPIC 1 완료** (스캐너 단독 실행 가능, LLM 판단·자동 수정·대시보드는 아직 미구현)
+🚧 개발 중 (2026.07~) · 현재 진행 상황: **EPIC 2 완료** (스캐너 + LLM 판단 파이프라인 자동 실행 가능, 자동 수정·대시보드는 아직 미구현)
 
 > ⚠️ "CodeSentry"는 임시 프로젝트명입니다. 작업/프로젝트명은 추후 변동될 수 있습니다.
 
@@ -35,7 +35,7 @@ AI가 코드를 더 빨리 짤수록 사람에게 남는 병목은 "이 코드�
 | --- | --- | --- |
 | EPIC 0 | 개발 환경·도구 학습 | ✅ 완료 |
 | EPIC 1 | 스캐너 (규칙 기반 필터) | ✅ 완료 |
-| EPIC 2 | 오케스트레이터 (LLM 판단) | ⬜ 예정 |
+| EPIC 2 | 오케스트레이터 (LLM 판단) | ✅ 완료 |
 | EPIC 3 | 생성 & 샌드박스 실행 | ⬜ 예정 |
 | EPIC 4~5 | 승인 게이트 + 백엔드 API | ⬜ 예정 |
 | EPIC 6 | React 대시보드 | ⬜ 예정 |
@@ -89,24 +89,26 @@ CodeSentry/
 │   └── DEVLOG.md
 │
 ├── backend/
-│   ├── main.py                     # FastAPI 앱 진입점
-│   ├── database.py                 # SQLite 연결 (SQLAlchemy)
-│   ├── models.py                   # scans / findings / llm_calls / actions / approvals
+│   ├── main.py                       # FastAPI 앱 진입점
+│   ├── database.py                   # SQLite 연결 (SQLAlchemy)
+│   ├── models.py                     # scans / findings / llm_calls / actions / approvals
 │   │
-│   ├── scanner/                    # EPIC 1
-│   │   ├── walker.py               # 대상 저장소 .py 파일 순회
-│   │   ├── complexity.py           # radon 연동
-│   │   ├── test_check.py           # 테스트 파일 존재 확인
-│   │   └── run_scan.py             # 판정 로직 + DB 저장
+│   ├── scanner/                      # EPIC 1
+│   │   ├── walker.py                 # 대상 저장소 .py 파일 순회
+│   │   ├── complexity.py             # radon 연동
+│   │   ├── test_check.py             # 테스트 파일 존재 확인
+│   │   └── run_scan.py               # 판정 로직 + DB 저장
 │   │
-│   ├── orchestrator/                # EPIC 2~3
-│   │   ├── tools.py                # assess_risk / generate_test / propose_fix 스키마
-│   │   └── llm_client.py           # Claude API 호출 래퍼
+│   ├── orchestrator/                 # EPIC 2~3
+│   │   ├── tools.py                  # assess_risk / generate_test / propose_fix 스키마
+│   │   ├── llm_client.py             # Claude API 호출 래퍼 + usage/cost 계산
+│   │   ├── persistence.py            # llm_calls/actions DB 저장
+│   │   └── run_pipeline.py           # findings 순회 자동 파이프라인
 │   │
-│   ├── sandbox/                     # EPIC 3
-│   │   └── executor.py             # subprocess 격리 실행 + 재시도 로직
+│   ├── sandbox/                      # EPIC 3
+│   │   └── executor.py               # subprocess 격리 실행 + 재시도 로직
 │   │
-│   ├── routers/                     # EPIC 5
+│   ├── routers/                      # EPIC 5
 │   │   ├── scans.py
 │   │   ├── findings.py
 │   │   ├── approvals.py
@@ -114,7 +116,7 @@ CodeSentry/
 │   │
 │   └── requirements.txt
 │
-└── frontend/                        # EPIC 6 (React)
+└── frontend/                         # EPIC 6 (React)
     ├── src/
     │   ├── App.jsx
     │   ├── pages/
@@ -140,9 +142,17 @@ python -m backend.scanner.run_scan
 
 `backend` 폴더를 대상으로 스캔해서 SQLite(`codesentry.db`)에 결과를 저장합니다. 전체 API·대시보드 실행 방법은 EPIC 5~6 완료 후 이 섹션에 채울 예정입니다.
 
+스캔 이후, 아직 판단이 끝나지 않은(`status='found'`) 위험 코드에 대해 LLM 판단을 실행하려면:
+
+```powershell
+python -m backend.orchestrator.run_pipeline
+```
+
+실행 전 프로젝트 최상위 폴더에 `.env` 파일을 만들고 `ANTHROPIC_API_KEY=본인_키` 형식으로 API 키를 넣어야 합니다.
+
 ## 기술 스택
 
-- **백엔드**: Python (FastAPI, radon, SQLAlchemy)
+- **백엔드**: Python (FastAPI, radon, SQLAlchemy, python-dotenv)
 - **프론트엔드**: React (Vite)
 - **DB**: SQLite
 - **LLM**: Claude API (tool-calling, `claude-haiku-4-5`)

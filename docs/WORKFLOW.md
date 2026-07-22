@@ -4,9 +4,9 @@
 | --- | --- |
 | 카테고리 | 개발 참고 문서 (완성 후 별도로 포트폴리오용 회고 문서 정리 예정) |
 | 파일형태 | 문서 |
-| 버전 | v0.2 (EPIC 1 완료) |
+| 버전 | v0.3 (EPIC 2 완료) |
 | 생성일 | 2026년 7월 3일 |
-| 수정일 | 2026년 7월 21일 |
+| 수정일 | 2026년 7월 22일 |
 | 담당자 | 사공민규 |
 | 기술 스택 | Python (FastAPI · radon) · SQLite (SQLAlchemy) · WebSocket · React · Claude API (tool-calling) |
 | 관련 문서 | `docs/AI에이전트_프로젝트_기획근거자료.md` — 근거자료·판단기준·아키텍처·LLM Tool·DB 스키마 전부 여기 있음 |
@@ -52,7 +52,7 @@
 
 - [x]  1주차 목표 달성
 - [x]  2주차 목표 달성
-- [ ]  3~4주차 목표 달성
+- [x]  3~4주차 목표 달성
 - [ ]  5주차 목표 달성
 - [ ]  6주차 목표 달성
 - [ ]  7~8주차 목표 달성
@@ -81,14 +81,16 @@ CodeSentry/
 │   │   ├── test_check.py           # 테스트 파일 존재 확인
 │   │   └── run_scan.py             # 판정 로직 + DB 저장
 │   │
-│   ├── orchestrator/                # EPIC 2~3
+│   ├── orchestrator/               # EPIC 2~3
 │   │   ├── tools.py                # assess_risk / generate_test / propose_fix 스키마
-│   │   └── llm_client.py           # Claude API 호출 래퍼
-│   │
-│   ├── sandbox/                     # EPIC 3
+│   │   ├── llm_client.py           # Claude API 호출 래퍼
+│   │   ├── persistence.py          # llm_calls/actions DB 저장 (save_action)    
+│   │   └── run_pipeline.py         # findings 순회 → 판단 → 저장 자동화 
+│   │ 
+│   ├── sandbox/                    # EPIC 3
 │   │   └── executor.py             # subprocess 격리 실행 + 재시도 로직
 │   │
-│   ├── routers/                     # EPIC 5
+│   ├── routers/                    # EPIC 5
 │   │   ├── scans.py
 │   │   ├── findings.py
 │   │   ├── approvals.py
@@ -96,7 +98,7 @@ CodeSentry/
 │   │
 │   └── requirements.txt
 │
-└── frontend/                        # EPIC 6 (React)
+└── frontend/                       # EPIC 6 (React)
     ├── src/
     │   ├── App.jsx
     │   ├── pages/
@@ -160,25 +162,27 @@ def analyze_file(filepath: str) -> list[dict]:
 - [x]  스캔 결과 DB 저장, 샘플 저장소로 단독 실행 테스트 (`_check_db.py`로 조회 검증 완료)
 - [x]  **✅ EPIC 1 완료 → GitHub 커밋 Push**
 
-## ⬜ EPIC 2. 오케스트레이터 — LLM 판단
+## ✅ EPIC 2. 오케스트레이터 — LLM 판단
 
 > LLM Tool 설계 근거: 설계문서 6장
 
-### ⬜ Task 2-1 · assess_risk 연동
+### ✅ Task 2-1 · assess_risk 연동
 
-- [ ]  `orchestrator/tools.py` — `assess_risk` tool 스키마 정의
-- [ ]  `orchestrator/llm_client.py` — Claude API 호출 래퍼 작성
+- [x]  `orchestrator/tools.py` — `assess_risk` tool 스키마 정의
+- [x]  `orchestrator/llm_client.py` — Claude API 호출 래퍼 작성 (.env + python-dotenv로 API 키 분리)
 
 > ⚠️ **안전장치는 프롬프트가 아니라 코드로 강제**
 > `confidence < 0.6`이면 LLM이 뭐라 답했든 백엔드 if문에서 `action_type`을 `escalate_human`으로 덮어씀. 프롬프트로 "확신 없으면 escalate 해줘"라고 부탁하는 방식은 신뢰하지 않음.
 
-> ⚠️ **결정 필요**
-> 관찰됨: assess_risk 결과에서 confidence가 높은데도(예: 0.85) 모델이 스스로 `escalate_human`을 선택한 케이스가 있었음. 이 경로를 정상 허용할지, 아니면 tool 스키마 자체에서 이 선택지를 백엔드 override 전용으로 못 박을지 — tool 스키마 확정하기 전에 먼저 결정.
+> ✅ **결정 완료 (2026-07-22)**
+> confidence는 action마다 가리키는 대상이 다름 — write_test/propose_fix에 대한 confidence(판단 신뢰도)와 escalate_human에 대한 confidence(escalate가 맞다는 확신)는 별개.  모델이 confidence 높게 escalate_human을 고르는 건 "자기 권한 밖 케이스를 정확히 인지한 것"이지 오류가 아님. 
+> → action_type enum 3개 그대로 유지, 스키마에서 제한하지 않음.
+> → `actions` 테이블에 `escalation_source` 컬럼(`model_choice` / `confidence_override`) 추가로 모델 자발적 선택과 백엔드 강제 override를 구분 기록.
 
-- [ ]  `confidence < 0.6` 강제 override 로직
-- [ ]  `llm_calls`, `actions` 테이블에 판단 결과·토큰 수·비용 저장
-- [ ]  스캐너 → 오케스트레이터 파이프라인 1차 통합 테스트
-- [ ]  **⬜ EPIC 2 완료 → GitHub 커밋 Push**
+- [x]  `confidence < 0.6` 강제 override 로직 (`finalize_action()`, 4가지 분기 케이스 단위 테스트 검증 완료)
+- [X]  `llm_calls`, `actions` 테이블에 판단 결과·토큰 수·비용 저장 (`persistence.py`의 `save_action()`)
+- [X]  스캐너 → 오케스트레이터 파이프라인 1차 통합 테스트 (`run_pipeline.py`, status='found' 자동 순회)
+- [X]  **✅ EPIC 2 완료 → GitHub 커밋 Push**
 
 ## ⬜ EPIC 3. 생성 & 샌드박스 실행
 
@@ -260,7 +264,8 @@ def run_test_isolated(test_code_path: str, timeout_sec: int = 10) -> dict:
 
 - 샌드박스 실행기 Docker 전환 — subprocess+resource → Docker 컨테이너 (설계문서 8장 참고)
 - `test_check.py`의 `has_test_file` — 현재는 파일명 패턴 매칭으로 "테스트 파일 존재 여부"만 확인. 그 파일 안에서 실제로 해당 함수를 테스트하는지(AST 파싱 + 호출/import 추적)는 확인 안함. EPIC 1 스코프상 결정론적이고 빠른 방식을 의도적으로 채택한 것 — 시간 여유 있으면 업그레이드 검토.
+- `run_pipeline.py`의 세션 관리 — 루프 안에서 finding마다 매번 `SessionLocal()`을 새로 여는 방식. Finding 개수가 크게 늘어나면 성능 이슈 가능성 있음. 지금은 "안전하게 한 건씩 확실히 처리"를 우선했고, 실제 성능 문제 확인되면 그때 리팩터링 검토. 
 
 ---
 
-*CodeSentry WORKFLOW v0.2 · 사공민규 · 최초 작성 2026.07.03 · 최종 수정 2026.07.21 (EPIC 1 완료)*
+*CodeSentry WORKFLOW v0.3 · 사공민규 · 최초 작성 2026.07.03 · 최종 수정 2026.07.22 (EPIC 2 완료)*

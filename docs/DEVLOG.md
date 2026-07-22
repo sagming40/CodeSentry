@@ -85,3 +85,47 @@ CodeSentry를 진행하며 그날그날 배운 것, 겪은 문제, 고민했던 
 ### 다음에 할 일
 - EPIC 2: `orchestrator/tools.py`의 `assess_risk` tool 스키마부터 시작
 - EPIC 2 들어가기 전에 확정할 것: confidence 높은데도(예: 0.85) 모델이 스스로 `escalate_human`을 선택하는 경로를 허용할지 여부 (WORKFLOW.md EPIC 2 섹션의 "결정 필요" 항목 참고)
+
+---
+
+## 2026-07-22 · EPIC 2 Task 2-1 (assess_risk 연동) — EPIC 2 완료
+
+### 오늘 한 일
+- EPIC 2 진입 전 "결정 필요" 항목 확정: confidence 높아도 모델이 스스로 escalate_human 선택하는 경로 허용 (스키마 제한 안 함), 대신 `escalation_source` 컬럼으로 model_choice/confidence_override 구분 기록하기로 결론
+- `assess_risk` tool 스키마 정의 (`orchestrator/tools.py`)
+- Claude API 호출 래퍼 (`orchestrator/llm_client.py`)
+- `.env` + `python-dotenv`로 API 키 관리 방식 전환 (Windows 시스템 환경변수 대신)
+- confidence<0.6 강제 override 로직 (`finalize_action()`) — 가짜 데이터 4가지 케이스(confidence 높/낮 × 모델이 escalate 선택함/안 함)로 단위 테스트 검증
+- `llm_calls`, `actions` 테이블 스키마 추가 (`models.py`)
+- Claude Haiku 4.5 가격(공식 발표 기준 $1/$5 per M tokens)으로 토큰→비용 계산 (`calculate_cost()`)
+- `llm_calls`/`actions` row 저장 함수 (`persistence.py`의 `save_action()`)
+- `run_pipeline.py` — status='found'인 Finding을 자동 순회하며 판단→저장, 처리 후 status 갱신
+- 실제 파이프라인 실행으로 end-to-end 검증 완료 (스캔→판단→DB저장 전체 흐름)
+
+### 겪었던 이슈들
+
+**1. API 인증 에러 — `anthropic.Anthropic()`이 키를 못 찾음**
+`TypeError: Could not resolve authentication method` 발생. 원인은 API 키를 이전 세션에서만 터미널에 임시로 넣어뒀었고, 새 터미널 창엔 그 값이 안 남아있었던 것. `.env` 파일 + `python-dotenv`의 `load_dotenv()`로 영구 등록하는 방식으로 전환. `.env`는 반드시 `.gitignore`에 먼저 등록한 뒤에 만들어야 실수로 커밋되는 걸 막을 수 있다는 걸 순서로 체감함.
+
+**2. 코드 저장 안 하고 실행 — `NameError: name 'load_dotenv' is not defined`**
+`load_dotenv()` 코드를 추가한 직후 저장(Ctrl+S) 없이 바로 실행해서, 파이썬이 디스크에 저장된 예전 버전을 읽어 실행한 게 원인. 저장하고 재실행하니 해결. "코드 수정 → 저장 → 실행" 순서를 습관으로 붙여야겠다고 느낌.
+
+**3. `codesentry.db`가 이미 Git 추적 중이었던 것 뒤늦게 발견**
+`.gitignore`에 `codesentry.db`를 추가했는데도 GitHub Desktop에 계속 "Modified"로 떴음. `.gitignore`는 "새로 추적을 시작하는 걸 막는" 규칙이지 "이미 추적 중인 걸 잊게" 하는 게 아니라는 걸 알게 됨. `git rm --cached codesentry.db`로 추적만 해제(로컬 파일은 유지)하고서야 해결.
+
+**4. 임시 검증용 파일(`_check_tables.py`, `_test_assess_risk.py`)이 실수로 커밋에 포함됨**
+`.gitignore`에 미리 등록 안 한 상태로 커밋해버려서, 나중에 뒤늦게 `.gitignore` 추가 + `git rm --cached`로 별도 정리 커밋을 만들어야 했음. `_list_findings.py`는 애초에 커밋된 적이 없어서 `.gitignore` 추가만으로 충분했던 것과 대비되는 케이스 — "이미 추적 중이었는가"에 따라 필요한 조치가 다르다는 걸 두 파일을 비교하며 확실히 이해함.
+
+**5. `python -m` 실행 시 모듈 경로에 `.py` 확장자를 붙인 실수**
+`python -m backend._test_assess_risk.py`처럼 실행해서 `ModuleNotFoundError` 발생. `-m` 방식은 점(`.`)으로 구분하는 모듈 경로 표기이지 실제 파일 경로가 아니라는 걸 다시 확인. 에러 메시지가 정확한 대안(`backend._test_assess_risk`)까지 알려줘서 바로 해결.
+
+### 오늘 배운 것 / 느낀 점
+- confidence라는 숫자 하나가 액션 종류에 따라 "가리키는 대상"이 다를 수 있다는 걸 실제 관찰(높은 confidence로 escalate 선택)과 설계 토론을 거쳐 이해하게 됨 — 겉보기엔 이상해 보이는 모델 행동이 실은 설계 의도와 정확히 맞아떨어지는 경우가 있다는 걸 체감.
+- `git rm --cached`의 `--cached` 옵션 하나 차이로 "추적 해제"와 "실제 파일 삭제"가 완전히 갈린다는 걸 정확히 이해하고 넘어감.
+- EPIC 1 때 배운 `DetachedInstanceError` 회피 패턴(세션 살아있을 때 값 미리 변수로 복사)을 이번 `persistence.py`, `run_pipeline.py`에서도 그대로 재적용 — 한 번 배운 교훈이 다음 코드에 자연스럽게 스며드는 걸 느낌.
+
+### 다음에 할 일
+- EPIC 3: `generate_test`, `propose_fix` tool 구현부터 시작
+- EPIC 3 진입 전 확인할 것: 샌드박스 실행기(subprocess+resource)와 재시도 로직(`attempt_number`) 연결 방식
+
+---
