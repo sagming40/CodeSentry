@@ -5,3 +5,6 @@ desktop.ini
 __pycache__/
 *.pyc
 codesentry.db
+_test_assess_risk.py
+_list_findings.py
+_check_tables.py
