@@ -129,3 +129,41 @@ CodeSentry를 진행하며 그날그날 배운 것, 겪은 문제, 고민했던 
 - EPIC 3 진입 전 확인할 것: 샌드박스 실행기(subprocess+resource)와 재시도 로직(`attempt_number`) 연결 방식
 
 ---
+
+## 2026-07-22 · EPIC 3 Task 3-1/3-2 (생성 tool + 샌드박스 실행기) — EPIC 3 완료
+
+### 오늘 한 일
+- EPIC 3 진입 전 "결정 필요" 항목 확정: 재시도는 샌드박스 재실행이 아니라 generate_test 재호출(실패 로그 피드백 포함)로, 생성→샌드박스→재시도 로직은 `run_pipeline.py`가 아닌 신규 모듈 `generation_manager.py`로 분리하기로 결론
+- `GENERATE_TEST_TOOL`, `PROPOSE_FIX_TOOL` 스키마 정의 (`orchestrator/tools.py`)
+- `generate_test()`, `propose_fix()` API 호출 함수 (`orchestrator/llm_client.py`)
+- `sandbox/executor.py` — subprocess+resource 기반 격리 실행기 (Windows에서 resource 미지원 확인 후 조건부 처리)
+- `Finding`에 `line_number`/`end_line_number`, `Action`에 `content`/`detail`/`execution_status` 컬럼 추가 (`models.py`)
+- `_read_function_source()` 헬퍼 — line_number 기준으로 파일에서 함수 소스만 슬라이싱
+- `generation_manager.py`의 `process_write_test()` — 재시도 루프(최대 2회, 실패 로그 피드백) + `run_write_test_phase()`로 자동 순회
+- `persistence.py`에 `save_generation_action()` 추가 — 생성 결과 전용 저장 함수
+- 더미 함수(`_dummy_target.py`)로 실제 findings 만들어서 판단→생성→샌드박스 검증까지 end-to-end 확인 완료
+
+### 겪었던 이슈들
+
+**1. function_code를 가져올 방법이 애초에 없었다**
+`generate_test()`가 함수 소스코드를 요구하는데, `Finding` 테이블엔 `function_name`만 있고 정확한 위치 정보가 없었다. 원인을 파보니 `complexity.py`가 radon에게서 `block.endline`을 이미 받아오고 있었는데 그걸 그냥 버리고 있었던 것 — "새 기능 추가"가 아니라 "누락 복구"에 가까웠다. `line_number`/`end_line_number`를 저장하도록 스캐너 쪽까지 거슬러 올라가서 고쳤다.
+
+**2. `resource` 모듈이 Windows에서 아예 import가 안 됨**
+샌드박스 실행기에 메모리 제한을 걸려고 `resource.setrlimit`을 썼는데, 이 모듈이 POSIX(Linux/Mac) 전용이라 Windows 개발 환경에서 `import` 자체가 실패한다는 걸 뒤늦게 알게 됨. `platform.system()`으로 분기해서 POSIX에서만 메모리 제한을 걸고, Windows에서는 timeout만 적용하는 것으로 우아하게 성능 저하시키는 방식을 택했다. 완벽한 격리는 아니지만, 애초에 subprocess+resource 자체가 "타협"으로 인정하고 시작한 설계라 이 한계 하나 추가되는 것도 같은 맥락으로 문서화하기로 함.
+
+**3. `max_tokens` 한도에 걸려 응답이 잘리면서 `KeyError` 발생**
+`generate_test()` 호출 결과에서 `test_code` 키가 없다는 `KeyError`가 났다. 진단용 스크립트로 실제 응답을 찍어보니 `test_code`, `covered_cases` 키 자체는 정상적으로 존재해서 처음엔 원인을 못 잡았는데, 생성된 테스트 코드가 굉장히 길다는 걸 보고 `max_tokens=1500`이 너무 작았을 가능성을 의심함. `1500 → 3000`으로 올리고, `stop_reason == "max_tokens"`를 명시적으로 체크해서 응답이 잘렸을 때 바로 알 수 있게 방어 코드를 추가했다. 재시도 루프 안에서 이 예외가 터지면 전체 프로세스가 죽어버리는 문제도 같이 발견해서, `try/except`로 감싸 "생성 자체 실패"도 하나의 실패 attempt로 흡수하도록 고침.
+
+**4. 검증용 더미 함수의 복잡도가 임계값에 못 미쳤던 것 두 번 반복**
+처음 만든 더미 함수(`classify_score`, if/elif 6분기)의 실제 순환 복잡도가 7이라 임계값(10)을 못 넘어서 findings가 0건으로 나왔다. "연결이 안 된 건가" 의심했었는데, radon으로 직접 복잡도를 미리 계산해보고 나서야 원인이 스캐너 연결 문제가 아니라 그냥 더미 함수 설계 자체의 문제였다는 걸 확인함. 이후로는 코드를 주기 전에 radon으로 복잡도를 미리 계산해보고 확실히 임계값을 넘는 걸 확인하는 습관을 들임.
+
+### 오늘 배운 것 / 느낀 점
+- "에러 없이 실행됨"과 "의도한 대로 동작함"이 다르다는 걸 이번에도 확인함 — `previous_failure` 인자를 실수로 안 넘겼을 때 에러는 전혀 안 났고, 결과만 봐서는 재시도가 "정상적으로" 실패한 것처럼 보였다. attempt 1과 attempt 2의 `covered_cases` 내용이 실질적으로 다른지까지 비교해봐야 재시도 로직이 진짜 작동하는지 확인할 수 있었다.
+- 검증 스크립트(`_check_*.py`)를 매번 짧게 만들어서 "이 함수 하나만" 떼어 확인하는 방식이, 전체 파이프라인을 통째로 돌려보고 원인 추적하는 것보다 훨씬 빠르게 문제를 좁혀준다는 걸 여러 번 체감함.
+- Task 3-1(생성 tool)과 Task 3-2(샌드박스)가 서로 의존관계라 커밋을 하나로 묶었는데, 이런 예외가 생길 때 "왜 원칙에서 벗어났는지"를 커밋 메시지에 남겨두는 게 나중에 히스토리 볼 때 헷갈리지 않게 해준다는 걸 확인함.
+
+### 다음에 할 일
+- EPIC 4: 승인 게이트 — `approvals` 테이블 설계, `process_propose_fix()` 구현, 승인/거부 API
+- EPIC 4 진입 전 확인할 것: propose_fix 결과(diff)를 실제로 어떻게 "적용"할지 — diff만 보여주고 사람이 수동 적용할지, 승인 시 자동으로 파일에 patch 적용할지 (설계문서에 명시 안 된 부분)
+
+---

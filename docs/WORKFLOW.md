@@ -4,7 +4,7 @@
 | --- | --- |
 | 카테고리 | 개발 참고 문서 (완성 후 별도로 포트폴리오용 회고 문서 정리 예정) |
 | 파일형태 | 문서 |
-| 버전 | v0.3 (EPIC 2 완료) |
+| 버전 | v0.4 (EPIC 3 완료) |
 | 생성일 | 2026년 7월 3일 |
 | 수정일 | 2026년 7월 22일 |
 | 담당자 | 사공민규 |
@@ -53,7 +53,7 @@
 - [x]  1주차 목표 달성
 - [x]  2주차 목표 달성
 - [x]  3~4주차 목표 달성
-- [ ]  5주차 목표 달성
+- [x]  5주차 목표 달성
 - [ ]  6주차 목표 달성
 - [ ]  7~8주차 목표 달성
 - [ ]  9~10주차 목표 달성
@@ -84,7 +84,8 @@ CodeSentry/
 │   ├── orchestrator/               # EPIC 2~3
 │   │   ├── tools.py                # assess_risk / generate_test / propose_fix 스키마
 │   │   ├── llm_client.py           # Claude API 호출 래퍼
-│   │   ├── persistence.py          # llm_calls/actions DB 저장 (save_action)    
+│   │   ├── persistence.py          # llm_calls/actions DB 저장 (save_action) 
+│   │   ├── generation_manager.py   # write_test 재시도 루프(생성 → 샌드박스 → 재시도) + 자동순회
 │   │   └── run_pipeline.py         # findings 순회 → 판단 → 저장 자동화 
 │   │ 
 │   ├── sandbox/                    # EPIC 3
@@ -180,20 +181,27 @@ def analyze_file(filepath: str) -> list[dict]:
 > → `actions` 테이블에 `escalation_source` 컬럼(`model_choice` / `confidence_override`) 추가로 모델 자발적 선택과 백엔드 강제 override를 구분 기록.
 
 - [x]  `confidence < 0.6` 강제 override 로직 (`finalize_action()`, 4가지 분기 케이스 단위 테스트 검증 완료)
-- [X]  `llm_calls`, `actions` 테이블에 판단 결과·토큰 수·비용 저장 (`persistence.py`의 `save_action()`)
-- [X]  스캐너 → 오케스트레이터 파이프라인 1차 통합 테스트 (`run_pipeline.py`, status='found' 자동 순회)
-- [X]  **✅ EPIC 2 완료 → GitHub 커밋 Push**
+- [x]  `llm_calls`, `actions` 테이블에 판단 결과·토큰 수·비용 저장 (`persistence.py`의 `save_action()`)
+- [x]  스캐너 → 오케스트레이터 파이프라인 1차 통합 테스트 (`run_pipeline.py`, status='found' 자동 순회)
+- [x]  **✅ EPIC 2 완료 → GitHub 커밋 Push**
 
-## ⬜ EPIC 3. 생성 & 샌드박스 실행
+## ✅ EPIC 3. 생성 & 샌드박스 실행
 
 > 리스크 통제 설계: 설계문서 5.2
 
-### ⬜ Task 3-1 · 생성 tool
+> ✅ **EPIC 3 진입 전 결정 (2026-07-22)**
+> - 재시도는 샌드박스 재실행이 아니라 **generate_test 재호출**(실패 pytest 로그를 프롬프트에 포함해 재생성)로 확정. 코드가 결정론적이라 같은 코드 재실행은 의미 없음.
+> - 생성→샌드박스→재시도 로직은 `run_pipeline.py`에 얹지 않고 `orchestrator/generation_manager.py`로 신규 분리 — 관심사 분리 원칙 유지.
 
-- [ ]  `generate_test` tool 구현 (write_test 케이스 → pytest 코드 생성)
-- [ ]  `propose_fix` tool 구현 (propose_fix 케이스 → diff 생성)
+> ⚠️ **구현 중 발견한 블로커 — function_code 조회 방법 없었음**
+> `generate_test`/`propose_fix`는 함수 소스코드가 필요한데, `Finding` 테이블에 `line_number`가 애초에 저장되지 않고 있었음(radon이 제공하는 `endline`을 스캔 단계에서 버리고 있었음). `Finding`에 `line_number`/`end_line_number` 컬럼을 추가하고, `_read_function_source()` 헬퍼로 파일에서 해당 줄 범위만 슬라이싱하는 방식으로 해결.
 
-### ⬜ Task 3-2 · 샌드박스 실행기
+### ✅ Task 3-1 · 생성 tool
+
+- [x]  `generate_test` tool 구현 (write_test 케이스 → pytest 코드 생성) — end-to-end 검증 완료
+- [x]  `propose_fix` tool 구현 (propose_fix 케이스 → diff 생성) — 스키마 · API 호출 함수까지 구현, 실제 처리 흐름(approvals 연동)은 EPIC 4에서 이어서 구현 예정
+
+### ✅ Task 3-2 · 샌드박스 실행기
 
 ```python
 # backend/sandbox/executor.py — 초안 (subprocess 기반 격리, Docker 아님 — 설계문서 5.3/8장 참고)
@@ -207,11 +215,14 @@ def run_test_isolated(test_code_path: str, timeout_sec: int = 10) -> dict:
     )
     return {"passed": result.returncode == 0, "output": result.stdout}
 ```
+> ⚠️ **초안 대비 실제 구현 시 달라진 점**
+> - `resource` 모듈은 POSIX 전용이라 Windows 개발 환경에서는 `import` 자체가 실패함 → `platform.system()` 체크로 조건부 처리, Windows에서는 timeout만 적용되고 메모리 제한은 미적용 (백로그 참고)
+> - `generate_test` 호출 시 `max_tokens=1500`으로는 응답이 중간에 잘리는 경우 확인 → `3000`으로 상향, `stop_reason == "max_tokens"` 체크로 방어 처리 추가
 
-- [ ]  격리 실행 환경 구성 (timeout, 리소스 제한)
-- [ ]  통과/실패 판정 → `execution_status` 갱신
-- [ ]  실패 시 1회만 재시도(`attempt_number` 증가) → 그래도 실패면 `needs_review`
-- [ ]  **⬜ EPIC 3 완료 → GitHub 커밋 Push**
+- [x]  격리 실행 환경 구성 (timeout, 리소스 제한 — Windows 한계는 위 메모 참고)
+- [x]  통과/실패 판정 → `execution_status` 갱신
+- [x]  실패 시 1회만 재시도(`attempt_number` 증가) → 그래도 실패면 `needs_review`
+- [x]  **✅ EPIC 3 완료 → GitHub 커밋 Push**
 
 ## ⬜ EPIC 4. 승인 게이트
 
@@ -264,8 +275,11 @@ def run_test_isolated(test_code_path: str, timeout_sec: int = 10) -> dict:
 
 - 샌드박스 실행기 Docker 전환 — subprocess+resource → Docker 컨테이너 (설계문서 8장 참고)
 - `test_check.py`의 `has_test_file` — 현재는 파일명 패턴 매칭으로 "테스트 파일 존재 여부"만 확인. 그 파일 안에서 실제로 해당 함수를 테스트하는지(AST 파싱 + 호출/import 추적)는 확인 안함. EPIC 1 스코프상 결정론적이고 빠른 방식을 의도적으로 채택한 것 — 시간 여유 있으면 업그레이드 검토.
-- `run_pipeline.py`의 세션 관리 — 루프 안에서 finding마다 매번 `SessionLocal()`을 새로 여는 방식. Finding 개수가 크게 늘어나면 성능 이슈 가능성 있음. 지금은 "안전하게 한 건씩 확실히 처리"를 우선했고, 실제 성능 문제 확인되면 그때 리팩터링 검토. 
+- `run_pipeline.py`의 세션 관리 — 루프 안에서 finding마다 매번 `SessionLocal()`을 새로 여는 방식. Finding 개수가 크게 늘어나면 성능 이슈 가능성 있음. 지금은 "안전하게 한 건씩 확실히 처리"를 우선했고, 실제 성능 문제 확인되면 그때 리팩터링 검토.
+- 샌드박스 메모리 제한 — `resource` 모듈은 POSIX 전용이라 Windows 개발 환경에서는 미적용(timeout만 적용됨). psutil 폴링이나 pywin32 Job Object로 대체 가능하나, 사전 차단이 아니거나 Windows 전용 의존성 추가가 필요해 현재 스코프에서는 보류.
+- `Action` 테이블의 실패 유형 구분 — "생성 자체 실패"(max_tokens 잘림 등, DB row 안 남음)와 "실행 실패"(execution_status='failed', DB row 남음)가 현재 다르게 기록됨. 나중에 대시보드/통계 볼 때 혼동 가능성 있어 인지해둘 것.
+- `propose_fix` 처리 흐름(`process_propose_fix()`) — EPIC 4에서 `approvals` 테이블과 함께 구현 예정 (지금 만들면 반쪽짜리가 됨). 
 
 ---
 
-*CodeSentry WORKFLOW v0.3 · 사공민규 · 최초 작성 2026.07.03 · 최종 수정 2026.07.22 (EPIC 2 완료)*
+*CodeSentry WORKFLOW v0.4 · 사공민규 · 최초 작성 2026.07.03 · 최종 수정 2026.07.22 (EPIC 3 완료)*
