@@ -5,6 +5,15 @@ desktop.ini
 __pycache__/
 *.pyc
 codesentry.db
+
+# 임시 검증용 스크립트 — 개발 중 일회성 확인용, 실제 기능이 아니므로 커밋 제외
+# (파일명 패턴: 밑줄로 시작 + 특정 기능/모듈 확인 목적)
 _test_assess_risk.py
 _list_findings.py
 _check_tables.py
+_check_read_source.py
+_check_generate_test.py
+_check_write_test_result.py
+
+# 검증용 더미 데이터 — 실제 스캔 대상 코드 아님
+_dummy_target.py

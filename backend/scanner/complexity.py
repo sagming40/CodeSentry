@@ -19,6 +19,7 @@ def analyze_file(filepath: str) -> list[dict]:
             "function_name": block.name,
             "complexity": block.complexity,
             "line_number": block.lineno,
+            "end_line_number": block.endline,  # 신규 추가 — radon이 이미 계산해주던 값 
         })
     return results
                 

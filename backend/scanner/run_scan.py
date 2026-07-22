@@ -32,6 +32,8 @@ def run_scan(repo_path: str) -> int:
                     function_name=r["function_name"],
                     complexity_score=r["complexity"],
                     has_test=test_exists,
+                    line_number=r["line_number"],           # 신규 추가
+                    end_line_number=r["end_line_number"],   # 신규 추가
                     status="found",
                 )
                 db.add(finding)

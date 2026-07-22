@@ -49,6 +49,11 @@ def run_pipeline() -> int:
     return processed_count
 
 if __name__ == "__main__":
+    from backend.orchestrator.generation_manager import run_write_test_phase
+    
     count = run_pipeline()
-    print(f"\n총 {count}건 처리 완료.") 
+    print(f"\n총 {count}건 판단 완료.")
+    
+    gen_count = run_write_test_phase()
+    print(f"총 {gen_count}건 테스트 생성/실행 완료.") 
        
