@@ -77,4 +77,35 @@ class Action(Base):
        
     created_at = Column(DateTime, default=datetime.utcnow) 
     
-    finding = relationship("Finding", back_populates="actions")      
+    finding = relationship("Finding", back_populates="actions")
+
+class Approval(Base):
+    """
+    비유: 회사 '결재함'
+    propose_fix가 diff를 만들면 여기 '결재 대기(pending)' 상태로 한 건씩 쌓임.
+    사람이 승인하면 patch가 실제로 파일에 적용되고,
+    거부하면 서류함에 '반려' 도장만 찍히고 끝 — 아무 일도 일어나지 않음
+    """          
+    __tablename__ = "approvals"
+    
+    id = Column(Integer, primary_key=True)
+    
+    # 어떤 Action(=propose_fix로 생성된 diff)에 대한 승인인지 연결하는 다리
+    # → diff 자체는 Action.content에 이미 저장돼 있어서 여기서 또 들고 있지 않음 (중복 저장 방지)
+    action_id = Column(Integer, ForeignKey("actions.id"), nullable=False)
+    
+    # 결재함의 도장 상태: pending(대기) → approved / rejected
+    status = Column(String, default="pending")
+    
+    # 승인 '이후' 실제로 파일에 patch 적용을 시도했는지의 결과
+    # 비유: 결재는 통과했는데 은행 시스템 오류로 실제 송금이 실패하는 경우가 있는 것과 같음
+    # None = 아직 승인 전이라 적용 자체를 시도한 적 없음 (pending/rejected는 계속 None으로 남는 게 정상)
+    applied_status = Column(String, nullable=True) # "success" / "failed" / None
+    
+    # 적용 실패 시 원인 기록 (patch 충돌, 대상 파일이 그 새 바뀜, 파일 없음 등)
+    error_message = Column(String, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)   # 결재함에 올라온 시각
+    resolved_at = Column(DateTime, nullable=True)            # 사람이 승인/거부를 누른 시각
+    
+    

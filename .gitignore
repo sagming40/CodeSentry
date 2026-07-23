@@ -14,6 +14,9 @@ _check_tables.py
 _check_read_source.py
 _check_generate_test.py
 _check_write_test_result.py
+_check_approvals.py
+_setup_test_finding.py
+_run_propose_fix_test.py
 
 # 검증용 더미 데이터 — 실제 스캔 대상 코드 아님
 _dummy_target.py

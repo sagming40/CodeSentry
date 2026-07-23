@@ -3,7 +3,8 @@
 from backend.database import SessionLocal
 from backend.models import Finding, Action
 from backend.sandbox.executor import run_test_isolated
-from backend.orchestrator.llm_client import generate_test, calculate_cost
+from backend.orchestrator.llm_client import generate_test, propose_fix, calculate_cost
+from backend.orchestrator.approval_manager import create_approval
 from backend.orchestrator.persistence import save_generation_action
 import tempfile
 import os
@@ -77,6 +78,39 @@ def process_write_test(finding_id: int, function_name: str, function_code: str, 
         
     # for 루프를 MAX_ATTEMPTS번 다 돌고도 여기 도달했다는 건 마지막 시도까지 실패했다는 뜻
     _update_finding_status(finding_id, "needs_review")
+
+
+def process_propose_fix(finding_id: int, function_name: str, function_code: str, risk_reason: str) -> None:
+    """
+    propose_fix로 판정된 finding 하나를 처리한다.
+    write_test와 다르게 재시도 루프도, 샌드박스 실행도 없음 —
+    diff는 사람이 검토할 대상이지, 코드가 자동으로 맞았는지 틀렸는지 판정할 대상이 아니기 때문.
+    비유: write_test는 "자판기가 알아서 음료를 뽑아서 맛을 확인시켜주는 것"이고,
+    propose_fix는 "요리사가 시식없이 바로 손님(사람) 테이블로 내보내는 것" — 맛 평가는 사람 몫.
+    """
+    gen_result, usage = propose_fix(
+        function_name=function_name,
+        function_code=function_code,
+        risk_reason=risk_reason,
+    )
+    cost = calculate_cost(usage)
+    
+    save_result = save_generation_action(
+        finding_id=finding_id,
+        usage=usage,
+        cost=cost,
+        tool_name="propose_fix",
+        action_type="propose_fix",
+        content=gen_result["fix_diff"],
+        detail=gen_result["fix_explanation"],
+        attempt_number=1,        # 이 줄 추가 — attempt_number가 누락되었었음 
+        execution_status=None,  # propose_fix는 샌드박스를 거치지 않으므로 계속 None (기존 주석에 이미 명시된 그대로)
+    )
+    
+    # diff를 결재함에 올림 — 신뢰도 무관 항상 사람 승인 (확정 설계)
+    create_approval(action_id=save_result["action_id"])
+    
+    _update_finding_status(finding_id, "awaiting_approval")
     
     
 def _update_finding_status(finding_id: int, new_status: str) -> None:
@@ -126,7 +160,48 @@ def run_write_test_phase() -> int:
         )
         processed_count += 1
         
-    return processed_count                                
+    return processed_count
+
+def run_propose_fix_phase() -> int:
+    """
+    status='propose_fix' 상태인 모든 Finding에 대해 process_propose_fix()를 실행한다.
+    run_write_test_phase()와 완전히 같은 뼈대 — 판단 결과가 다른 갈래(propose_fix)로
+    갈라졌을 때의 자동순회 버전.
+    반환값: 처리한 finding 개수
+    """                                
+    db = SessionLocal()
+    targets = db.query(Finding).filter(Finding.status == "propose_fix").all()
+    
+    target_data = []
+    for f in targets:
+        # 이 finding을 propose_fix로 판단했던 assess_risk의 risk_reason을 가져옴
+        last_judgement = (
+            db.query(Action)
+            .filter(Action.finding_id == f.id, Action.final_action_type == "propose_fix")
+            .order_by(Action.created_at.desc())
+            .first()
+        )
+        target_data.append((
+            f.id, f.file_path, f.function_name,
+            f.line_number, f.end_line_number,
+            last_judgement.risk_reason if last_judgement else ""
+        ))
+    db.close()  # 조회만 하고 바로 닫음 (run_write_test_phase()와 같은 패턴) 
+    
+    processed_count = 0
+    for finding_id, file_path, function_name, line_number, end_line_number, risk_reason in target_data:
+        print(f"[{finding_id}] {function_name} 수정안 생성 중...")
+        
+        function_code = _read_function_source(file_path, line_number, end_line_number)
+        process_propose_fix(
+            finding_id=finding_id,
+            function_name=function_name,
+            function_code=function_code,
+            risk_reason=risk_reason,
+        )
+        processed_count += 1
+        
+    return processed_count       
     
 
 def _read_function_source(file_path: str, line_number: int, end_line_number: int) -> str:
