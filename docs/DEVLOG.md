@@ -167,3 +167,42 @@ CodeSentry를 진행하며 그날그날 배운 것, 겪은 문제, 고민했던 
 - EPIC 4 진입 전 확인할 것: propose_fix 결과(diff)를 실제로 어떻게 "적용"할지 — diff만 보여주고 사람이 수동 적용할지, 승인 시 자동으로 파일에 patch 적용할지 (설계문서에 명시 안 된 부분)
 
 ---
+
+## 2026-07-23 · EPIC 4 Task 4-1/4-2 (승인 게이트) — EPIC 4 완료
+
+### 오늘 한 일
+- EPIC 4 진입 전 "결정 필요" 항목 확정: 승인 시 diff만 표시가 아니라 자동으로 patch까지 적용하는 것으로 결론 (승인 게이트가 실제 행동을 트리거해야 의미가 있다는 논리, 대신 백업+롤백 필수 조건)
+- `models.py`에 `Approval` 테이블 추가
+- `orchestrator/approval_manager.py` 신규 — `create_approval()`, `approve_approval()`, `reject_approval()`, `apply_patch()`
+- `generation_manager.py`에 `process_propose_fix()`, `run_propose_fix_phase()` 추가
+- `routers/approvals.py` 신규 — 프로젝트 첫 FastAPI 라우터, `PATCH /approvals/{id}`
+- `patch`(PyPI) 라이브러리 도입 — unified diff를 순수 파이썬으로 적용 (git 저장소 여부·OS 무관하게 동작)
+- Swagger(`/docs`)로 실제 승인 API 호출 → patch 적용 성공/충돌 롤백 양쪽 케이스 end-to-end 검증
+
+### 겪었던 이슈들
+
+**1. `patch` 라이브러리가 diff 헤더의 파일 경로를 그대로 신뢰함**
+LLM이 `propose_fix`로 만든 diff의 `--- a/...` 헤더가 실제 파일 경로가 아니라 함수 이름 기준의 임의 경로였다(`a/analyze_file`처럼). `apply_patch()`에 넘긴 `file_path`는 백업 뜰 때만 쓰이고, 실제 patch 적용 대상은 diff 헤더가 결정한다는 걸 알게 됨. `_normalize_diff_paths()`로 헤더를 실제 경로로 강제 치환해서 해결.
+
+**2. `patch` 라이브러리가 컨텍스트 불일치를 걸러주지 않음**
+일부러 실제 파일과 안 맞는 diff(존재하지 않는 줄을 지우려는 diff)를 만들어서 테스트했더니, 라이브러리가 실패 처리 없이 `applied=True`로 조용히 잘못된 위치를 덮어써버림. 줄 번호만 믿고 컨텍스트 내용은 검증하지 않는 라이브러리라는 걸 확인. `_verify_diff_matches_file()`로 적용 전 직접 재검증하는 이중 안전장치를 추가해서 해결 — 라이브러리 하나만 믿지 않고 우리 코드로 한 번 더 확인하는 게 왜 필요한지 실전으로 체감한 케이스.
+
+**3. diff의 줄 번호가 "코드 조각 기준"이지 "실제 파일 기준"이 아니었음**
+`_read_function_source()`로 함수만 잘라서 LLM에게 넘기다 보니, LLM이 만든 diff는 항상 "1번째 줄부터 시작"하는 것처럼 헤더를 씀. 근데 실제 파일에서 그 함수는 4번째 줄부터 시작하는 식이라, 검증 로직이 엉뚱한 위치(진짜 1번째 줄)를 보고 불일치라고 판단해버림. `_normalize_diff_line_numbers()`로 `finding.line_number` 기준 offset을 계산해서 diff 헤더를 실제 위치로 밀어서 해결.
+
+**4. LLM이 `@@` 헤더에 적은 줄 개수가 실제 본문과 다름**
+diff가 길어질수록(if문 여러 개 추가) LLM이 헤더의 `old_count`/`new_count`를 직접 세다가 실수함. 라이브러리 디버그 로그(`WARNING:patch:extra lines for hunk`)로 원인 확인. `_recompute_diff_counts()`로 헤더 숫자를 본문 기준으로 재계산해서 해결. 이걸로 diff 처리 안전장치가 경로/줄번호/개수 세 가지 전부 "LLM 출력을 있는 그대로 믿지 않고 코드로 강제 보정"하는 동일한 원칙으로 통일됨.
+
+**5. 자잘한 오타·누락 여러 건**
+`__tablename__: "approvals"`(`:` 대신 `=`이어야 함), `ForeignKey("action.id")`(실제 테이블명은 `actions`), `save_generation_action()` 호출 시 `attempt_number` 누락, `.filter(...),all()`(쉼표가 점 자리에), `main.py`에서 라우터 import만 하고 `include_router()` 누락, `requirements.txt`가 PowerShell 리다이렉션(`>`) 때문에 UTF-16으로 저장돼있던 것 — 전부 실제로 재현해서 하나씩 확인 후 수정. 특히 `apply_patch()`에 `line_offset` 파라미터를 추가하면서 예전 호출 줄을 지우는 걸 깜빡해 함수가 두 번 호출되는 실수도 있었음(나중 호출이 결과를 덮어써서 조용히 무효화됨).
+
+### 오늘 배운 것 / 느낀 점
+- "승인 게이트"라는 개념 자체를 실제로 구현해보면서, 승인이라는 행위가 단순히 상태값 하나 바꾸는 게 아니라 "실제 행동을 트리거하는 관문"으로 설계돼야 의미가 있다는 걸 체감함. 이번 결정(자동 적용)과 그 반대(수동 적용)를 놓고 고민했던 과정 자체가 human-in-the-loop 설계에서 뭘 사람에게 맡기고 뭘 시스템이 자동화할지 가르는 기준을 세우는 연습이었음.
+- 외부 라이브러리(`patch`)를 가져다 쓸 때 "라이브러리가 실패를 항상 정확히 보고해줄 것"이라는 가정 자체가 틀릴 수 있다는 걸 직접 부딪혀서 배움. 일부러 실패 케이스(충돌 diff)를 만들어서 확인하지 않았으면 이 문제를 계속 몰랐을 뻔했음 — EPIC 1 때 배운 "정상 케이스만 돌려보고 넘어가지 않기" 습관이 이번에도 그대로 통했음.
+- 버그를 하나 고치면 그 다음 층위의 버그가 드러나는 경험을 이번에 특히 많이 함(경로 → 컨텍스트 → 줄번호 → 개수 순서로 4단계). 매번 "이번엔 진짜 끝났겠지"라는 성급한 판단 대신 실제로 재현 테스트를 계속 돌려본 게 맞는 접근이었다고 생각함.
+
+### 다음에 할 일
+- EPIC 5: 백엔드 API 완성 — `GET /findings`(상태별 필터), `GET /findings/{id}`(상세), `POST /scans`(스캔 트리거), `WS /ws/scans/{id}`(실시간 진행 상황)
+- EPIC 5 진입 전 확인할 것: 딱히 없음 — routers 폴더 구조와 각 엔드포인트 스펙은 WORKFLOW.md에 이미 명시돼있어 바로 시작 가능
+
+---

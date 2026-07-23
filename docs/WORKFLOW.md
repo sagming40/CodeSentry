@@ -4,9 +4,9 @@
 | --- | --- |
 | 카테고리 | 개발 참고 문서 (완성 후 별도로 포트폴리오용 회고 문서 정리 예정) |
 | 파일형태 | 문서 |
-| 버전 | v0.4 (EPIC 3 완료) |
+| 버전 | v0.5 (EPIC 4 완료) |
 | 생성일 | 2026년 7월 3일 |
-| 수정일 | 2026년 7월 22일 |
+| 수정일 | 2026년 7월 23일 |
 | 담당자 | 사공민규 |
 | 기술 스택 | Python (FastAPI · radon) · SQLite (SQLAlchemy) · WebSocket · React · Claude API (tool-calling) |
 | 관련 문서 | `docs/AI에이전트_프로젝트_기획근거자료.md` — 근거자료·판단기준·아키텍처·LLM Tool·DB 스키마 전부 여기 있음 |
@@ -91,10 +91,10 @@ CodeSentry/
 │   ├── sandbox/                    # EPIC 3
 │   │   └── executor.py             # subprocess 격리 실행 + 재시도 로직
 │   │
-│   ├── routers/                    # EPIC 5
+│   ├── routers/                    # approvals.py는 EPIC 4에서 구현 완료, 나머지는 EPIC 5
 │   │   ├── scans.py
 │   │   ├── findings.py
-│   │   ├── approvals.py
+│   │   ├── approvals.py            # ✅ 구현 완료
 │   │   └── ws.py
 │   │
 │   └── requirements.txt
@@ -224,11 +224,30 @@ def run_test_isolated(test_code_path: str, timeout_sec: int = 10) -> dict:
 - [x]  실패 시 1회만 재시도(`attempt_number` 증가) → 그래도 실패면 `needs_review`
 - [x]  **✅ EPIC 3 완료 → GitHub 커밋 Push**
 
-## ⬜ EPIC 4. 승인 게이트
+## ✅ EPIC 4. 승인 게이트
 
-- [ ]  `propose_fix` 결과는 무조건 `approvals` 테이블에 `pending`으로 생성
-- [ ]  승인/거부 API (`PATCH /approvals/{id}`)
-- [ ]  승인 시 처리 방식 확정 (자동 적용 vs diff만 표시 — 구현하며 재검토)
+> ✅ **EPIC 4 진입 전 결정 (2026-07-23)**
+> propose_fix 결과(diff) 승인 시 처리 방식 확정: diff만 보여주고 사람이 수동 적용하는 방식이 아니라, **승인 = 자동으로 patch까지 적용**하는 것으로 결정. 승인 API가 존재하는데 실제 적용은 사람이 수동으로 해야 한다면 승인 게이트 자체가 무의미해진다는 논리. 대신 적용 전 원본 백업 + 실패 시 롤백을 반드시 함께 구현하는 조건으로 진행. (설계문서 미기재 부분 — 이번 결정으로 확정)
+
+### ✅ Task 4-1 · approvals 테이블 + propose_fix 처리
+
+- [x]  `models.py`에 `Approval` 테이블 정의 (action_id로 Action과 연결, diff 자체는 중복 저장 안 함)
+- [x]  `orchestrator/approval_manager.py` 신규 — `create_approval()` (결재 대기 상태로 등록)
+- [x]  `generation_manager.py`에 `process_propose_fix()`, `run_propose_fix_phase()` 추가 (write_test와 달리 재시도/샌드박스 없이 바로 사람 승인 대기로 전환)
+- [x]  더미 finding으로 실제 approvals row 생성 + Finding.status 전환(`awaiting_approval`) end-to-end 검증
+
+### ✅ Task 4-2 · 승인/거부 API + patch 자동 적용
+
+- [x]  `routers/approvals.py` 신규 — `PATCH /approvals/{id}` (decision: approve/reject), 프로젝트 첫 FastAPI 라우터 연결 (`main.py`에 `include_router`)
+- [x]  `approve_approval()`/`reject_approval()` — 중복 처리 방어 (`status != "pending"` 체크)
+- [x]  `apply_patch()` — `patch`(PyPI) 라이브러리로 diff 적용, 실패 시 백업본으로 롤백
+- [x]  LLM이 생성한 diff를 있는 그대로 신뢰하지 않고 코드로 강제 보정하는 안전장치 3종 추가 (전부 실전 테스트로 실패 재현 후 확정):
+  - `_normalize_diff_paths()` — diff 헤더의 파일 경로(LLM이 임의로 붙인 이름)를 실제 파일 경로로 강제 치환
+  - `_normalize_diff_line_numbers()` — 코드 조각 기준(1번째 줄)으로 생성된 diff 줄 번호를 실제 파일 위치(line_offset)로 보정
+  - `_recompute_diff_counts()` — LLM이 `@@` 헤더에 잘못 기입한 줄 개수를 본문 기준으로 재계산
+- [x]  `_verify_diff_matches_file()` — `patch` 라이브러리가 컨텍스트 불일치를 항상 걸러주지 않는다는 것을 실제 테스트로 확인 → 적용 전 직접 재검증하는 이중 안전장치
+- [x]  Swagger(`/docs`)로 승인 API 실제 호출 → patch 적용 성공/충돌 롤백 양쪽 케이스 모두 end-to-end 검증 완료
+- [x]  **✅ EPIC 4 완료 → GitHub 커밋 Push**
 
 ## ⬜ EPIC 5. 백엔드 API 완성
 
@@ -236,7 +255,7 @@ def run_test_isolated(test_code_path: str, timeout_sec: int = 10) -> dict:
 - [ ]  `POST /scans` (스캔 트리거)
 - [ ]  `WS /ws/scans/{id}` (진행 상황 실시간 push)
 - [ ]  Swagger(`/docs`)로 전체 API 점검
-- [ ]  **⬜ EPIC 4~5 완료 → GitHub 커밋 Push**
+- [ ]  **⬜ EPIC 5 완료 → GitHub 커밋 Push**
 
 ## ⬜ EPIC 6. React 대시보드
 
@@ -278,8 +297,7 @@ def run_test_isolated(test_code_path: str, timeout_sec: int = 10) -> dict:
 - `run_pipeline.py`의 세션 관리 — 루프 안에서 finding마다 매번 `SessionLocal()`을 새로 여는 방식. Finding 개수가 크게 늘어나면 성능 이슈 가능성 있음. 지금은 "안전하게 한 건씩 확실히 처리"를 우선했고, 실제 성능 문제 확인되면 그때 리팩터링 검토.
 - 샌드박스 메모리 제한 — `resource` 모듈은 POSIX 전용이라 Windows 개발 환경에서는 미적용(timeout만 적용됨). psutil 폴링이나 pywin32 Job Object로 대체 가능하나, 사전 차단이 아니거나 Windows 전용 의존성 추가가 필요해 현재 스코프에서는 보류.
 - `Action` 테이블의 실패 유형 구분 — "생성 자체 실패"(max_tokens 잘림 등, DB row 안 남음)와 "실행 실패"(execution_status='failed', DB row 남음)가 현재 다르게 기록됨. 나중에 대시보드/통계 볼 때 혼동 가능성 있어 인지해둘 것.
-- `propose_fix` 처리 흐름(`process_propose_fix()`) — EPIC 4에서 `approvals` 테이블과 함께 구현 예정 (지금 만들면 반쪽짜리가 됨). 
 
 ---
 
-*CodeSentry WORKFLOW v0.4 · 사공민규 · 최초 작성 2026.07.03 · 최종 수정 2026.07.22 (EPIC 3 완료)*
+*CodeSentry WORKFLOW v0.5 · 사공민규 · 최초 작성 2026.07.03 · 최종 수정 2026.07.23 (EPIC 4 완료)*
