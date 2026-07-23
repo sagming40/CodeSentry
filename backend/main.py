@@ -1,6 +1,9 @@
 from fastapi import FastAPI
+from backend.routers import approvals
 
 app = FastAPI()
+
+app.include_router(approvals.router)
 
 @app.get("/")
 def read_root():
