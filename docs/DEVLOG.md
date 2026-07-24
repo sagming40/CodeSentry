@@ -206,3 +206,33 @@ diff가 길어질수록(if문 여러 개 추가) LLM이 헤더의 `old_count`/`n
 - EPIC 5 진입 전 확인할 것: 딱히 없음 — routers 폴더 구조와 각 엔드포인트 스펙은 WORKFLOW.md에 이미 명시돼있어 바로 시작 가능
 
 ---
+
+## 2026-07-24 · EPIC 5 Task 5-1 ~ 5-3 (백엔드 API 완성) — EPIC 5 완료
+
+### 오늘 한 일
+- Task 5-1: `routers/findings.py` 신규 — `GET /findings`(status 필터), `GET /findings/{id}`(404 처리). `approval_manager.py`와 동일한 `SessionLocal()` open/close 패턴으로 통일
+- Task 5-2 진입 전 결정: `POST /scans` 동기/비동기 논의 끝에 비동기(BackgroundTasks)로 확정 — WS Task와 의미적으로 맞물리려면 필수. `run_scan.py`를 `create_scan_record()`/`execute_scan()`로 분리
+- Task 5-3 진입 전 결정: WS 진행상황을 "상태만" 대신 "진행률(%)"까지 보여주기로 하고, `Scan.files_processed` 컬럼 추가 + `routers/ws_scans.py` 신규(0.5초 폴링 방식)
+- 세 Task 전부 Swagger/직접 작성한 클라이언트 스크립트로 실제 서버 띄워서 end-to-end 검증 완료
+
+### 겪었던 이슈들
+
+**1. `scan_id = scan_id` 자기대입 오타 (`UnboundLocalError`)**
+`create_scan_record()`에서 `scan.id`를 넣어야 할 자리에 `scan_id`라고 쳐서 자기 자신을 참조하는 오타가 남. `scan.id`와 `scan_id`가 시각적으로 거의 같아서 생긴 흔한 실수. traceback으로 정확한 줄 확인 후 바로 수정.
+
+**2. Swagger에서 쿼리 파라미터 값에 `필드명=` 까지 같이 입력한 실수**
+`GET /findings?status=...`를 테스트할 때 입력창에 `status=found`라고 통째로 쳐서, 실제로는 `status`라는 값(`=found`가 포함된 문자열) 자체를 찾게 됨. Swagger의 파라미터 입력창은 **값만** 넣는 자리라는 걸 Request URL의 `%3D`(인코딩된 `=`) 보고 확인함.
+
+**3. `files_processed`가 계속 0으로 보이던 문제 — 서버 켠 채로 스키마 마이그레이션**
+`Scan.files_processed` 컬럼을 `ALTER TABLE`로 추가했는데, 그 시점에 uvicorn 서버가 이미 켜져 있었음. 코드(`run_scan.py`, `ws_scans.py`, `models.py`) 전부 대조해봐도 철자·로직 다 정확했는데 DB엔 계속 0만 저장됨. 서버를 완전히 껐다 켜니 정상적으로 `4/35 → 35/35`로 진행률이 올라가는 걸 확인. `--reload`는 코드 파일 변경은 감지해도, 파일 밖(직접 SQL)에서 일어난 DB 스키마 변경은 감지 못 한다는 걸 직접 겪고 확인함.
+
+### 오늘 배운 것 / 느낀 점
+- "코드는 완벽한데 왜 안 되지"의 답이 항상 코드 안에 있는 건 아니라는 걸 다시 확인함. 이번엔 실행 환경(서버가 켜진 채로 스키마를 바꾼 것) 쪽 문제였고, 코드 대조만 반복했으면 못 찾았을 것 — 재현 조건 자체를 바꿔보는(서버 재시작) 실험이 결정적이었음.
+- `POST /scans`를 비동기로 설계할지 결정할 때, "기술적으로 어렵냐"보다 "체감 효과가 있냐"를 먼저 냉정하게 따져본 게 좋은 판단 기준이 됐음 — 지금 스코프(스캐너만)에서는 진행률이 순식간에 끝나버려도, 나중에 LLM 단계까지 API로 묶일 걸 감안하면 지금 투자하는 게 맞다는 결론에 도달한 과정 자체가 남을 만한 기록이라고 생각함.
+- WS는 REST와 달리 Swagger로 테스트가 안 돼서, 파이썬 스크립트(`websockets`+`httpx`)로 직접 클라이언트를 짜서 검증해야 했음 — 새로운 통신 방식을 붙일 때마다 검증 도구 자체도 새로 필요하다는 걸 체감함.
+
+### 다음에 할 일
+- EPIC 6: React 대시보드 — findings 목록/상세, DiffViewer, 승인/거부 버튼, WebSocket 진행상황 표시, 비용 리포트
+- EPIC 6 진입 전 확인할 것: 프론트엔드 기술 스택은 이미 EPIC 0에서 Vite+React(JS, Oxlint)로 확정돼있어 바로 시작 가능. 다만 상태 관리 라이브러리(Context API로 충분할지, 별도 라이브러리 필요할지)는 아직 논의 안 됨 — EPIC 6 진입 전 짚고 갈 것
+
+---

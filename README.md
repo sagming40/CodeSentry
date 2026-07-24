@@ -3,7 +3,7 @@
 > 저장소를 스캔해 위험도를 판단하고, 테스트 작성 또는 코드 수정 중
 > 필요한 조치를 스스로 선택해 실행·검증하는 AI 에이전트
 
-🚧 개발 중 (2026.07~) · 현재 진행 상황: **EPIC 4 완료** (스캐너 + LLM 판단 + 테스트 자동 생성·검증 + 승인 게이트까지 동작, 백엔드 API 전체 연결·대시보드는 아직 미구현)
+🚧 개발 중 (2026.07~) · 현재 진행 상황: **EPIC 5 완료** (스캐너 + LLM 판단 + 테스트 자동 생성·검증 + 승인 게이트 + 백엔드 API 전체 연결까지 동작, React 대시보드는 아직 미구현)
 
 > ⚠️ "CodeSentry"는 임시 프로젝트명입니다. 작업/프로젝트명은 추후 변동될 수 있습니다.
 
@@ -38,7 +38,7 @@ AI가 코드를 더 빨리 짤수록 사람에게 남는 병목은 "이 코드�
 | EPIC 2 | 오케스트레이터 (LLM 판단) | ✅ 완료 |
 | EPIC 3 | 생성 & 샌드박스 실행 | ✅ 완료 |
 | EPIC 4 | 승인 게이트 | ✅ 완료 |
-| EPIC 5 | 백엔드 API 완성 | ⬜ 예정 |
+| EPIC 5 | 백엔드 API 완성 | ✅ 완료 |
 | EPIC 6 | React 대시보드 | ⬜ 예정 |
 | EPIC 7~8 | 통합 · 마무리 · 포트폴리오 정리 | ⬜ 예정 |
 
@@ -119,11 +119,11 @@ CodeSentry/
 │   ├── sandbox/                      # EPIC 3
 │   │   └── executor.py               # subprocess 격리 실행 + 재시도 로직
 │   │
-│   ├── routers/                      # approvals.py는 EPIC 4에서 구현 완료, 나머지는 EPIC 5
-│   │   ├── scans.py
-│   │   ├── findings.py
+│   ├── routers/                      # EPIC 4 ~ 5에서 전부 구현 완료
+│   │   ├── scans.py                  # ✅ 구현 완료 (POST /scans, BackgroundTasks 비동기)
+│   │   ├── findings.py               # ✅ 구현 완료 (GET /findings, GET /findings/{id})
 │   │   ├── approvals.py              # ✅ 구현 완료
-│   │   └── ws.py
+│   │   └── ws_scans.py               # ✅ 구현 완료 (WS /ws/scans/{scan_id}, 폴링 방식)
 │   │
 │   └── requirements.txt
 │
@@ -142,25 +142,40 @@ CodeSentry/
     └── package.json
 ```
 
+---
+
 ## 실행 방법 (현재까지 구현된 범위)
 
-전체 서비스(FastAPI + React)는 아직 미완성이며, 지금은 스캐너 모듈만 단독으로 실행할 수 있습니다.
+전체 백엔드 API가 EPIC 5부터 실행 가능합니다. React 대시보드(EPIC 6)는 아직 미구현입니다.
+
+### 전체 백엔드 API 실행
+
+```powershell
+uvicorn backend.main:app --reload
+```
+
+`http://127.0.0.1:8000/docs`에서 Swagger로 `GET /findings`, `GET /findings/{id}`, `POST /scans`, `PATCH /approvals/{id}` 전부 테스트할 수 있습니다. `WS /ws/scans/{id}`는 WebSocket이라 Swagger로는 테스트가 안 되고, 별도 클라이언트(파이썬 `websockets` 라이브러리 등)로 연결해야 합니다.
+
+### 스캐너만 단독 실행하고 싶다면
 
 ```powershell
 # 프로젝트 최상위 폴더에서, venv 활성화 상태로
 python -m backend.scanner.run_scan
 ```
 
-`backend` 폴더를 대상으로 스캔해서 SQLite(`codesentry.db`)에 결과를 저장합니다. 전체 API·대시보드 실행 방법은 EPIC 5~6 완료 후 이 섹션에 채울 예정입니다.
+`backend` 폴더를 대상으로 스캔해서 SQLite(`codesentry.db`)에 결과를 저장합니다.
 
 스캔 이후, 아직 판단이 끝나지 않은(`status='found'`) 위험 코드에 대해 LLM 판단을 실행하려면:
 
 ```powershell
 python -m backend.orchestrator.run_pipeline
 ```
-(위 명령 한 번으로 판단→생성→검증까지 자동으로 이어집니다. 재시도 로직 포함 — 실패 시 1회만 재생성 후 그래도 실패하면 `needs_review` 상태로 넘어갑니다.)
+
+(위 명령 한 번으로 판단 → 생성 → 검증까지 자동으로 이어집니다. 재시도 로직 포함 — 실패 시 1회만 재생성 후 그래도 실패하면 `needs_review` 상태로 넘어갑니다.)
 
 실행 전 프로젝트 최상위 폴더에 `.env` 파일을 만들고 `ANTHROPIC_API_KEY=본인_키` 형식으로 API 키를 넣어야 합니다.
+
+---
 
 ## 기술 스택
 

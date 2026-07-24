@@ -4,9 +4,9 @@
 | --- | --- |
 | 카테고리 | 개발 참고 문서 (완성 후 별도로 포트폴리오용 회고 문서 정리 예정) |
 | 파일형태 | 문서 |
-| 버전 | v0.5 (EPIC 4 완료) |
+| 버전 | v0.6 (EPIC 5 완료) |
 | 생성일 | 2026년 7월 3일 |
-| 수정일 | 2026년 7월 23일 |
+| 수정일 | 2026년 7월 24일 |
 | 담당자 | 사공민규 |
 | 기술 스택 | Python (FastAPI · radon) · SQLite (SQLAlchemy) · WebSocket · React · Claude API (tool-calling) |
 | 관련 문서 | `docs/AI에이전트_프로젝트_기획근거자료.md` — 근거자료·판단기준·아키텍처·LLM Tool·DB 스키마 전부 여기 있음 |
@@ -54,7 +54,7 @@
 - [x]  2주차 목표 달성
 - [x]  3~4주차 목표 달성
 - [x]  5주차 목표 달성
-- [ ]  6주차 목표 달성
+- [x]  6주차 목표 달성
 - [ ]  7~8주차 목표 달성
 - [ ]  9~10주차 목표 달성
 - [ ]  11주차 목표 달성 (여유 시)
@@ -91,11 +91,11 @@ CodeSentry/
 │   ├── sandbox/                    # EPIC 3
 │   │   └── executor.py             # subprocess 격리 실행 + 재시도 로직
 │   │
-│   ├── routers/                    # approvals.py는 EPIC 4에서 구현 완료, 나머지는 EPIC 5
-│   │   ├── scans.py
-│   │   ├── findings.py
+│   ├── routers/                    # EPIC 4 ~ 5에서 전부 구현 완료
+│   │   ├── scans.py                # ✅ 구현 완료 (POST /scans, BackgroundTasks 비동기)
+│   │   ├── findings.py             # ✅ 구현 완료 (GET /findings, GET /findings/{id})
 │   │   ├── approvals.py            # ✅ 구현 완료
-│   │   └── ws.py
+│   │   └── ws_scans.py             # ✅ 구현 완료 (WS /ws/scans/{scan_id}, 폴링 방식)
 │   │
 │   └── requirements.txt
 │
@@ -249,13 +249,33 @@ def run_test_isolated(test_code_path: str, timeout_sec: int = 10) -> dict:
 - [x]  Swagger(`/docs`)로 승인 API 실제 호출 → patch 적용 성공/충돌 롤백 양쪽 케이스 모두 end-to-end 검증 완료
 - [x]  **✅ EPIC 4 완료 → GitHub 커밋 Push**
 
-## ⬜ EPIC 5. 백엔드 API 완성
+## ✅ EPIC 5. 백엔드 API 완성
 
-- [ ]  `GET /findings` (상태별 필터), `GET /findings/{id}` (상세)
-- [ ]  `POST /scans` (스캔 트리거)
-- [ ]  `WS /ws/scans/{id}` (진행 상황 실시간 push)
-- [ ]  Swagger(`/docs`)로 전체 API 점검
-- [ ]  **⬜ EPIC 5 완료 → GitHub 커밋 Push**
+### ✅ Task 5-1 · GET /findings, GET /findings/{id}
+
+- [x]  `routers/findings.py` 신규 — `list_findings`(status 쿼리 파라미터로 필터), `get_finding`(404 처리)
+- [x]  `approval_manager.py`와 동일하게 `SessionLocal()` 직접 open/close 패턴으로 통일 (일관성 우선 선택 — 한계는 백로그 참고)
+- [x]  Swagger로 전체조회/status 필터/상세조회/404 네 가지 케이스 실제 서버 실행 후 end-to-end 검증
+
+### ✅ Task 5-2 · POST /scans (비동기 실행)
+
+> ✅ **결정 완료 (2026-07-23)**
+> 동기 실행이 아니라 **비동기(BackgroundTasks) 실행**으로 확정. 스캔이 몇 초~몇십 초 걸릴 수 있는데, 다음 Task인 WS 진행상황 push와 의미적으로 맞물리려면 완료를 기다리지 않고 즉시 응답해야 한다는 논리. `run_scan.py`를 `create_scan_record()`(레코드 생성)/`execute_scan()`(실제 실행) 두 함수로 분리 — 기존 CLI 실행(`run_scan()`)은 두 함수를 순서대로 호출하는 래퍼로 남겨 하위호환 유지.
+
+- [x]  `run_scan.py` 리팩터링 (레코드 생성/실제 실행 분리)
+- [x]  `routers/scans.py` 신규 — `POST /scans`, `status_code=202`(Accepted)
+- [x]  실제로 202 즉시 응답 + 백그라운드 완료 후 `Scan.status`/`findings` 정상 저장 end-to-end 검증
+
+### ✅ Task 5-3 · WS /ws/scans/{id}
+
+> ✅ **결정 완료 (2026-07-24)**
+> 진짜 이벤트 push가 아니라 **0.5초 간격 DB 폴링** 방식으로 확정. "진행률(%) 표시" 수준까지 가기로 하고 `Scan.files_processed` 컬럼을 신규 추가(스키마 변경, `ALTER TABLE`로 기존 데이터는 보존). 단, 로컬 소규모 저장소 스캔은 순식간에 끝나서 진행률이 부드럽게 안 보일 수 있음 — 데모 시 파일 다수인 더미 저장소 사용 권장.
+
+- [x]  `models.py`에 `Scan.files_processed` 컬럼 추가 + `ALTER TABLE`로 마이그레이션
+- [x]  `execute_scan()`에 파일 처리마다 진행률 갱신(`files_processed`) 로직 추가
+- [x]  `routers/ws_scans.py` 신규 — `WS /ws/scans/{scan_id}`
+- [x]  `websockets`+`httpx` 테스트 스크립트로 `POST /scans` → WS 진행률 실시간 수신 end-to-end 검증 (`4/35` → `35/35` 진행 확인)
+- [x]  **✅ EPIC 5 완료 → GitHub 커밋 Push**
 
 ## ⬜ EPIC 6. React 대시보드
 
@@ -297,7 +317,10 @@ def run_test_isolated(test_code_path: str, timeout_sec: int = 10) -> dict:
 - `run_pipeline.py`의 세션 관리 — 루프 안에서 finding마다 매번 `SessionLocal()`을 새로 여는 방식. Finding 개수가 크게 늘어나면 성능 이슈 가능성 있음. 지금은 "안전하게 한 건씩 확실히 처리"를 우선했고, 실제 성능 문제 확인되면 그때 리팩터링 검토.
 - 샌드박스 메모리 제한 — `resource` 모듈은 POSIX 전용이라 Windows 개발 환경에서는 미적용(timeout만 적용됨). psutil 폴링이나 pywin32 Job Object로 대체 가능하나, 사전 차단이 아니거나 Windows 전용 의존성 추가가 필요해 현재 스코프에서는 보류.
 - `Action` 테이블의 실패 유형 구분 — "생성 자체 실패"(max_tokens 잘림 등, DB row 안 남음)와 "실행 실패"(execution_status='failed', DB row 남음)가 현재 다르게 기록됨. 나중에 대시보드/통계 볼 때 혼동 가능성 있어 인지해둘 것.
+- 라우터의 수동 `SessionLocal()` open/close 패턴 — 예외 발생 시 `db.close()`가 스킵될 수 있음(`try/finally` 부재). 지금은 일관성 우선으로 유지, 나중에 `Depends(get_db)` 제너레이터 패턴으로 전체 라우터 리팩터링 검토.
+- `WS /ws/scans/{id}`의 폴링 방식 한계 — 진짜 이벤트 push가 아니라 0.5초 간격 DB 폴링임. 스캔 대상이 훨씬 커지거나(LLM 판단 단계까지 API로 묶이는 경우) 동시 접속자가 늘어나면 폴링 부하가 문제될 수 있어, 그때는 pub/sub 구조(예: asyncio Queue 기반 broadcast) 전환 검토.
+- DB 스키마를 파일 밖(직접 SQL, `ALTER TABLE` 등)에서 바꿀 땐 **서버를 반드시 내렸다 켜야 함** — `--reload`는 코드 파일 변경만 감지하지, 실행 중인 커넥션 풀의 스키마 캐시까지 갱신해주지 않음. EPIC 5 Task 5-3에서 이걸 놓쳐서 `files_processed`가 계속 0으로 보이는 문제를 겪고서 확인함.
 
 ---
 
-*CodeSentry WORKFLOW v0.5 · 사공민규 · 최초 작성 2026.07.03 · 최종 수정 2026.07.23 (EPIC 4 완료)*
+*CodeSentry WORKFLOW v0.6 · 사공민규 · 최초 작성 2026.07.03 · 최종 수정 2026.07.24 (EPIC 5 완료)*
