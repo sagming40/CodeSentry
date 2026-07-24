@@ -15,6 +15,9 @@ class Scan(Base):
     finished_at = Column(DateTime, nullable=True)
     total_files_scanned = Column(Integer, default=0)
     
+    # 비유: total_files_scanned가 "전체 배달할 물건 갯수"라면,
+    # files_processed는 "지금까지 배달 완료한 갯수" — 이 두 컬럼의 비율로 진행률(%)을 계산함
+    files_processed = Column(Integer, default=0)
     findings = relationship("Finding", back_populates="scan")
 
 class Finding(Base):

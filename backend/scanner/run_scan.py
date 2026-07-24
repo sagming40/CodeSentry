@@ -40,7 +40,12 @@ def execute_scan(scan_id: int, repo_path: str) -> None:
     try:
         files = find_python_files(repo_path)
         
-        for filepath in files:
+        # 전체 갯수를 미리 채워둠 — WS가 진행률(%) 분모로 쓸 수 있게
+        # (기존엔 스캔이 다 끝난 뒤에야 이 값이 채워져서, "진행중"에는 분모를 알 방법이 없었음)
+        scan.total_files_scanned = len(files)
+        db.commit()
+        
+        for i, filepath in enumerate(files, start=1):
             results = analyze_file(filepath)
             test_exists = has_test_file(filepath)
             
@@ -57,9 +62,14 @@ def execute_scan(scan_id: int, repo_path: str) -> None:
                         status="found",
                     )
                     db.add(finding)
+                    
+            # 파일 하나 끝날 때 마다 진행률 갱신 + 커밋
+            # (매 파일마다 커밋하는 게 배치로 한 번에 하는 것보다 느리긴 하지만,
+            #  WS가 폴링할 때마다 "지금까지 처리한 갯수"를 실시간으로 보여주려면 필요한 트레이드오프)
+            scan.files_processed = i
+            db.commit()        
         
         scan.status = "completed"
-        scan.total_files_scanned = len(files)
         db.commit()
     
     except Exception:
